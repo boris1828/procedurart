@@ -14,6 +14,10 @@ if ($LASTEXITCODE -ne 0) { throw 'build failed' }
 $docs = Join-Path $root 'docs'
 New-Item -ItemType Directory -Force $docs | Out-Null
 $out = Join-Path $build 'bin'
-Copy-Item "$out\signrec.html" "$docs\index.html" -Force
+$stamp = Get-Date -Format 'yyyyMMddHHmmss'
+$html = [IO.File]::ReadAllText("$out\signrec.html", [Text.Encoding]::UTF8)
+$html = $html.Replace('__BUILD__', $stamp) -replace 'src="?signrec\.js"?', "src=`"signrec.js?v=$stamp`""
+if ($html -notmatch "signrec\.js\?v=$stamp") { throw 'could not stamp script url' }
+[IO.File]::WriteAllText("$docs\index.html", $html, (New-Object Text.UTF8Encoding $false))
 Copy-Item "$out\signrec.js", "$out\signrec.wasm" $docs -Force
 Write-Host "Done: $docs  (serve with: python -m http.server 8000 --directory docs)"

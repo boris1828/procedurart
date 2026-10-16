@@ -8,7 +8,8 @@ function(add_piece name)
         VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
     if(EMSCRIPTEN)
         # Emits <name>.html/.js/.wasm using the mobile page in web/shell.html.
-        set_target_properties(${name} PROPERTIES SUFFIX ".html")
+        set_target_properties(${name} PROPERTIES SUFFIX ".html"
+            LINK_DEPENDS ${CMAKE_SOURCE_DIR}/web/shell.html) # relink when the page changes
         target_link_options(${name} PRIVATE
             --shell-file ${CMAKE_SOURCE_DIR}/web/shell.html
             -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sFORCE_FILESYSTEM=1

@@ -72,7 +72,10 @@
   function act(fn) {
     if (!ready) return;
     busy.style.display = 'block';
-    setTimeout(() => { fn(); show(); busy.style.display = 'none'; }, 20);
+    setTimeout(() => {
+      try { fn(); show(); busy.style.display = 'none'; }
+      catch (e) { busy.textContent = 'error: ' + (e && e.message || e); console.error(e); }
+    }, 20);
   }
 
   const gridRow = document.getElementById('grid');
@@ -110,6 +113,8 @@
 
   var Module = {
     canvas: document.getElementById('gl'),
+    // Stamped by web/build.ps1 so a new page never runs with an old cached .wasm.
+    locateFile: (p) => p + '?v=__BUILD__',
     onRuntimeInitialized() {
       ready = true;
       act(() => { const [w, h] = screenPx(); Module._web_resize(w, h); Module._web_randomize_all(); });
