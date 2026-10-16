@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>procedurart</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; touch-action: manipulation; }
+  #view { position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block; }
+  #gl { display: none; } /* raylib needs a canvas for its GL context; nothing is shown on it */
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 8px;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(8px);
+    font: 15px system-ui, sans-serif; color: #fff;
+    transition: transform .2s;
+  }
+  #bar.hidden { transform: translateY(100%); }
+  .row { display: flex; gap: 8px; }
+  button {
+    flex: 1; min-height: 44px; border: 0; border-radius: 10px;
+    background: rgba(255,255,255,.18); color: #fff; font: inherit;
+  }
+  button:active { background: rgba(255,255,255,.35); }
+  .grid button { flex: 1; }
+  .grid button.on { background: #fff; color: #000; }
+  #busy { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 12px;
+          border-radius: 99px; background: rgba(0,0,0,.6); color: #fff; font: 13px system-ui; display: none; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<canvas id="gl" tabindex="-1"></canvas>
+<div id="busy">rendering…</div>
+<div id="bar">
+  <div class="row grid" id="grid"></div>
+  <div class="row">
+    <button id="rand">Randomize all</button>
+    <button id="col">Randomize colors</button>
+    <button id="png">Download PNG</button>
+  </div>
+</div>
+<script>
+  const view = document.getElementById('view');
+  const bar = document.getElementById('bar');
+  const busy = document.getElementById('busy');
+  const ctx = view.getContext('2d');
+  let ready = false, grid = 1;
+
+  // Physical pixels of the screen, capped so huge displays stay fast.
+  function screenPx() {
+    const dpr = window.devicePixelRatio || 1;
+    let w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+    const k = Math.min(1, 2800 / Math.max(w, h));
+    return [Math.round(w * k), Math.round(h * k)];
+  }
+
+  function show() {
+    const w = Module._web_out_w(), h = Module._web_out_h();
+    const ptr = Module._web_pixels();
+    const px = new Uint8ClampedArray(Module.HEAPU8.buffer, ptr, w * h * 4).slice();
+    view.width = w; view.height = h;
+    ctx.putImageData(new ImageData(px, w, h), 0, 0);
+  }
+
+  // Run a state change, repainting after the "rendering…" badge has had a chance to appear.
+  function act(fn) {
+    if (!ready) return;
+    busy.style.display = 'block';
+    setTimeout(() => { fn(); show(); busy.style.display = 'none'; }, 20);
+  }
+
+  const gridRow = document.getElementById('grid');
+  for (let n = 1; n <= 5; n++) {
+    const b = document.createElement('button');
+    b.textContent = n === 1 ? '1' : n + '×' + n;
+    if (n === grid) b.classList.add('on');
+    b.onclick = () => {
+      grid = n;
+      [...gridRow.children].forEach((c, i) => c.classList.toggle('on', i + 1 === n));
+      act(() => Module._web_set_grid(n));
+    };
+    gridRow.appendChild(b);
+  }
+  document.getElementById('rand').onclick = () => act(() => Module._web_randomize_all());
+  document.getElementById('col').onclick = () => act(() => Module._web_randomize_colors());
+  document.getElementById('png').onclick = () => {
+    if (!ready || !Module._web_save_png()) return;
+    const data = Module.FS.readFile('/art.png');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([data], { type: 'image/png' }));
+    a.download = 'procedurart-' + Date.now() + '.png';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  // Tap the art to hide/show the controls.
+  view.onclick = () => bar.classList.toggle('hidden');
+
+  let resizeTimer;
+  addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => act(() => { const [w, h] = screenPx(); Module._web_resize(w, h); Module._web_set_grid(grid); }), 250);
+  });
+
+  var Module = {
+    canvas: document.getElementById('gl'),
+    onRuntimeInitialized() {
+      ready = true;
+      act(() => { const [w, h] = screenPx(); Module._web_resize(w, h); Module._web_randomize_all(); });
+    },
+  };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
