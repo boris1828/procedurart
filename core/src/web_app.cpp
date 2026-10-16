@@ -57,6 +57,12 @@ public:
         compose();
     }
 
+    void perturb() {
+        piece_->set_seed(seed_);
+        piece_->perturb();
+        compose();
+    }
+
     void randomize_colors() {
         piece_->randomize_colors();
         compose();
@@ -118,6 +124,7 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE void web_resize(int w, int h) { core::App::get().resize(w, h); }
 EMSCRIPTEN_KEEPALIVE void web_set_grid(int n) { core::App::get().set_grid(n); }
 EMSCRIPTEN_KEEPALIVE void web_randomize_all() { core::App::get().randomize_all(); }
+EMSCRIPTEN_KEEPALIVE void web_perturb() { core::App::get().perturb(); }
 EMSCRIPTEN_KEEPALIVE void web_randomize_colors() { core::App::get().randomize_colors(); }
 EMSCRIPTEN_KEEPALIVE const uint8_t* web_pixels() { return core::App::get().pixels(); }
 EMSCRIPTEN_KEEPALIVE int web_out_w() { return core::App::get().out_w(); }

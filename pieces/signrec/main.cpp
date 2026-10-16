@@ -93,6 +93,22 @@ public:
         new_colors(r);
     }
 
+    // Each numeric parameter has a 50% chance to move by up to +-10% of its value (at
+    // least one grid step); the switches flip rarely. Colors are untouched. Retries
+    // until the result still has bumps, otherwise leaves the parameters as they were.
+    void perturb() override {
+        core::Rng r = time_rng();
+        const Signrec before = *this;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            *this = before;
+            perturb_once(r);
+            sanitize();
+            core::Rng preview(seed());
+            if (generate(preview).successes > 0) return;
+        }
+        *this = before;
+    }
+
     bool ui() override {
         bool c = false;
         c |= slider(kEdgeWidth, "Edge width", &edge_width_, 3, 100);
@@ -160,6 +176,10 @@ public:
         ImGui::SameLine();
         if (ImGui::Button("Randomize selected")) {
             randomize(true);
+            c = true;
+        }
+        if (ImGui::Button("Small perturbation")) {
+            perturb();
             c = true;
         }
         sanitize();
@@ -367,6 +387,35 @@ private:
         if (on(kFill)) fill_ = r.chance(0.5f);
         if (on(kFillMode)) fill_mode_ = r.range(0, 2);
         if (on(kPalette)) new_colors(r);
+    }
+
+    void perturb_once(core::Rng& r) {
+        constexpr float kAmount = 0.10f; // max relative change of a perturbed parameter
+        auto nudge = [&](int& v, int lo, int hi, int step) {
+            if (!r.chance(0.5f)) return;
+            int d = static_cast<int>(std::lround(static_cast<float>(v) * r.range(-kAmount, kAmount)));
+            if (std::abs(d) < step) d = r.chance(0.5f) ? step : -step;
+            v = std::clamp(v + d, lo, hi);
+        };
+        nudge(grid_, 1, 100, 1);
+        nudge(edge_width_, 3, 100, 1);
+        if (r.chance(0.5f)) rects_ = std::clamp(rects_ + (r.chance(0.5f) ? 1 : -1), 1, 4);
+        sanitize();
+        nudge(margin_, 0, 300, grid_);
+        nudge(l_min_, 10, 300, grid_);
+        nudge(d_min_, 10, 300, grid_);
+        nudge(d_max_, 10, 600, grid_);
+        nudge(eps_min_, 3, 200, 1);
+        nudge(target_successes_, 1, 500, 1);
+        nudge(max_iters_, 1, 20000, 1);
+        sanitize();
+        if (rects_ > 1) {
+            auto [sp_lo, sp_hi] = spacing_range();
+            nudge(spacing_, sp_lo, sp_hi, grid_);
+        }
+        if (r.chance(0.1f)) no_collide_ = !no_collide_;
+        if (r.chance(0.1f)) fill_ = !fill_;
+        if (r.chance(0.1f)) fill_mode_ = (fill_mode_ + r.range(1, 2)) % 3;
     }
 
     static core::Rng time_rng() {

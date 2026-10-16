@@ -39,6 +39,9 @@
   <div class="row">
     <button id="rand">Randomize all</button>
     <button id="col">Randomize colors</button>
+  </div>
+  <div class="row">
+    <button id="pert">Small perturbation</button>
     <button id="png">Download PNG</button>
   </div>
 </div>
@@ -85,6 +88,7 @@
     gridRow.appendChild(b);
   }
   document.getElementById('rand').onclick = () => act(() => Module._web_randomize_all());
+  document.getElementById('pert').onclick = () => act(() => Module._web_perturb());
   document.getElementById('col').onclick = () => act(() => Module._web_randomize_colors());
   document.getElementById('png').onclick = () => {
     if (!ready || !Module._web_save_png()) return;

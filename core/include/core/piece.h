@@ -30,6 +30,8 @@ public:
     virtual void set_canvas_size(int /*w*/, int /*h*/) {}
     virtual void randomize_all() {}
     virtual void randomize_colors() {}
+    // Nudge the parameters slightly (colors untouched).
+    virtual void perturb() {}
 
     // The seed the app will pass to render() (the rng is reseeded with it).
     // Set by the app before ui(), so a piece can preview what a render would give.
