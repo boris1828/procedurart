@@ -68,6 +68,27 @@ public:
         compose();
     }
 
+    void set_spawner(int i) {
+        piece_->set_seed(seed_);
+        piece_->set_spawner(i);
+        compose();
+    }
+
+    int spawner_count() const { return piece_->spawner_count(); }
+    int spawner() const { return piece_->spawner(); }
+
+    // Colors as 0xRRGGBB (foregrounds first, background last); count first.
+    int palette_count() const {
+        Color c[8];
+        return piece_->palette(c, 8);
+    }
+    int palette_color(int i) const {
+        Color c[8];
+        const int n = piece_->palette(c, 8);
+        if (i < 0 || i >= n) return 0;
+        return (c[i].r << 16) | (c[i].g << 8) | c[i].b;
+    }
+
     const uint8_t* pixels() const { return pixels_.data(); }
     int out_w() const { return out_w_; }
     int out_h() const { return out_h_; }
@@ -124,6 +145,11 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE void web_resize(int w, int h) { core::App::get().resize(w, h); }
 EMSCRIPTEN_KEEPALIVE void web_set_grid(int n) { core::App::get().set_grid(n); }
 EMSCRIPTEN_KEEPALIVE void web_randomize_all() { core::App::get().randomize_all(); }
+EMSCRIPTEN_KEEPALIVE void web_set_spawner(int i) { core::App::get().set_spawner(i); }
+EMSCRIPTEN_KEEPALIVE int web_spawner() { return core::App::get().spawner(); }
+EMSCRIPTEN_KEEPALIVE int web_spawner_count() { return core::App::get().spawner_count(); }
+EMSCRIPTEN_KEEPALIVE int web_palette_count() { return core::App::get().palette_count(); }
+EMSCRIPTEN_KEEPALIVE int web_palette_color(int i) { return core::App::get().palette_color(i); }
 EMSCRIPTEN_KEEPALIVE void web_perturb() { core::App::get().perturb(); }
 EMSCRIPTEN_KEEPALIVE void web_randomize_colors() { core::App::get().randomize_colors(); }
 EMSCRIPTEN_KEEPALIVE const uint8_t* web_pixels() { return core::App::get().pixels(); }

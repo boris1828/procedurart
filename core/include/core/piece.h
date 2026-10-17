@@ -32,6 +32,12 @@ public:
     virtual void randomize_colors() {}
     // Nudge the parameters slightly (colors untouched).
     virtual void perturb() {}
+    // Current colors, foregrounds first then the background; returns how many were written.
+    virtual int palette(Color* /*out*/, int /*max*/) const { return 0; }
+    // Switchable initial-state methods (how the starting shapes are spawned).
+    virtual int spawner_count() const { return 0; }
+    virtual int spawner() const { return 0; }
+    virtual void set_spawner(int /*index*/) {}
 
     // The seed the app will pass to render() (the rng is reseeded with it).
     // Set by the app before ui(), so a piece can preview what a render would give.

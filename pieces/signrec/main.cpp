@@ -1,9 +1,11 @@
 ﻿#include "core/palette.h"
 #include "core/piece.h"
+#include "spawners.h"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -11,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-using core::Vec2;
+namespace signrec {
 
 namespace {
 
@@ -21,52 +23,6 @@ uint64_t clock_bits() {
 
 uint8_t to_byte(float v) { return static_cast<uint8_t>(v * 255.0f + 0.5f); }
 core::Color to_color(const float c[3]) { return {to_byte(c[0]), to_byte(c[1]), to_byte(c[2]), 255}; }
-
-Vec2 operator+(Vec2 a, Vec2 b) { return {a.x + b.x, a.y + b.y}; }
-Vec2 operator-(Vec2 a, Vec2 b) { return {a.x - b.x, a.y - b.y}; }
-Vec2 operator*(Vec2 a, float s) { return {a.x * s, a.y * s}; }
-float length(Vec2 a) { return std::sqrt(a.x * a.x + a.y * a.y); }
-
-// Every edge is axis-aligned and drawn as a rectangle: the segment inflated by
-// half the stroke width on all sides (so the ends are square, not round).
-struct Rect {
-    float x0, y0, x1, y1;
-};
-
-Rect stroke_rect(Vec2 a, Vec2 b, float hw) {
-    return {std::min(a.x, b.x) - hw, std::min(a.y, b.y) - hw,
-            std::max(a.x, b.x) + hw, std::max(a.y, b.y) + hw};
-}
-
-// Distance between two rectangles (0 if they touch or overlap).
-float rect_gap(const Rect& r, const Rect& s) {
-    float dx = std::max({0.0f, r.x0 - s.x1, s.x0 - r.x1});
-    float dy = std::max({0.0f, r.y0 - s.y1, s.y0 - r.y1});
-    return std::sqrt(dx * dx + dy * dy);
-}
-
-// Fills the interior of a closed axis-aligned polygon with horizontal slabs: between
-// two consecutive vertex heights, the vertical edges crossing the slab pair up
-// left-to-right and each pair bounds a filled rectangle.
-void fill_orthogonal(core::Canvas& canvas, const std::vector<Vec2>& p, core::Color col) {
-    std::vector<float> ys;
-    for (Vec2 v : p) ys.push_back(v.y);
-    std::sort(ys.begin(), ys.end());
-    ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
-
-    for (size_t s = 0; s + 1 < ys.size(); ++s) {
-        const float y0 = ys[s], y1 = ys[s + 1], mid = 0.5f * (y0 + y1);
-        std::vector<float> xs;
-        for (size_t i = 0; i < p.size(); ++i) {
-            const Vec2 a = p[i], b = p[(i + 1) % p.size()];
-            if (a.x != b.x) continue; // only vertical edges
-            if (std::min(a.y, b.y) < mid && mid < std::max(a.y, b.y)) xs.push_back(a.x);
-        }
-        std::sort(xs.begin(), xs.end());
-        for (size_t k = 0; k + 1 < xs.size(); k += 2)
-            canvas.rect({xs[k], y0}, {xs[k + 1] - xs[k], y1 - y0}, col);
-    }
-}
 
 } // namespace
 
@@ -93,9 +49,23 @@ public:
         new_colors(r);
     }
 
+    int palette(core::Color* out, int max) const override {
+        int n = 0;
+        for (int i = 1; i <= n_fg_ && n < max; ++i) out[n++] = to_color(colors_[i]);
+        if (n < max) out[n++] = to_color(colors_[0]);
+        return n;
+    }
+    int spawner_count() const override { return static_cast<int>(spawners().size()); }
+    int spawner() const override { return spawner_idx_; }
+    void set_spawner(int index) override {
+        spawner_idx_ = index;
+        sanitize();
+    }
+
     // Each numeric parameter has a 50% chance to move by up to +-10% of its value (at
-    // least one grid step); the switches flip rarely. Colors are untouched. Retries
-    // until the result still has bumps, otherwise leaves the parameters as they were.
+    // least one grid step); the switches flip rarely. Colors and the spawn method are
+    // untouched. Retries until the result still has bumps, otherwise leaves the
+    // parameters as they were.
     void perturb() override {
         core::Rng r = time_rng();
         const Signrec before = *this;
@@ -111,14 +81,25 @@ public:
 
     bool ui() override {
         bool c = false;
+
+        // The spawn method is picked by hand: Randomize never switches it.
+        {
+            std::string items;
+            for (const Spawner* s : spawners()) {
+                items += s->name();
+                items += '\0';
+            }
+            ImGui::SetNextItemWidth(190);
+            if (ImGui::Combo("Spawn method", &spawner_idx_, items.c_str())) {
+                sanitize();
+                c = true;
+            }
+        }
+
         c |= slider(kEdgeWidth, "Edge width", &edge_width_, 3, 100);
         c |= slider(kMargin, "Margin", &margin_, 0, 300);
-        c |= slider(kRects, "Rectangles", &rects_, 1, 4);
-        sanitize(); // so the spacing range below is valid for the current values
-        auto [sp_lo, sp_hi] = spacing_range();
-        ImGui::BeginDisabled(rects_ < 2);
-        c |= slider(kSpacing, "Rect spacing", &spacing_, sp_lo, sp_hi);
-        ImGui::EndDisabled();
+        sanitize(); // so the spawner's ranges are valid for the current values
+        c |= active().ui(common());
         c |= slider(kLMin, "l min", &l_min_, 10, 300);
         c |= slider(kDMin, "d min", &d_min_, 10, 300);
         c |= slider(kDMax, "d max", &d_max_, 10, 600);
@@ -133,6 +114,8 @@ public:
         c |= ImGui::Checkbox("No layer collisions", &no_collide_);
         ImGui::PopID();
 
+        // Open shapes (lines) have no interior to fill.
+        ImGui::BeginDisabled(!active().closed_shapes());
         ImGui::PushID(kFill);
         ImGui::Checkbox("##sel", &sel_[kFill]);
         ImGui::SameLine();
@@ -150,6 +133,7 @@ public:
         c |= ImGui::RadioButton("One color", &fill_mode_, kFillOneColor);
         ImGui::EndDisabled();
         ImGui::PopID();
+        ImGui::EndDisabled();
 
         c |= palette_row();
 
@@ -190,7 +174,7 @@ public:
         canvas.clear(to_color(colors_[0]));
         sanitize();
 
-        const std::vector<Polygon> polys = generate(rng).polys;
+        const std::vector<Shape> shapes = generate(rng).shapes;
 
         // Color assignment has its own seeds, so it never disturbs the geometry and
         // strokes/fills can be reshuffled independently. Strokes use the four
@@ -199,67 +183,62 @@ public:
         core::Rng stroke_rng(stroke_seed_);
         const int fixed_fg = 1 + core::Rng(fill_seed_).range(0, n_fg_ - 1); // for kFillOneColor
         const float hw = static_cast<float>(edge_width_) * 0.5f;
-        for (const Polygon& pts : polys) {
+        for (const Shape& sh : shapes) {
             const int stroke_idx = 1 + stroke_rng.range(0, n_fg_ - 1);
             const int fill_idx = fill_mode_ == kFillBackground ? 0
                                : fill_mode_ == kFillEdge       ? stroke_idx
                                                                : fixed_fg;
             const core::Color col = to_color(colors_[stroke_idx]);
-            if (fill_) fill_orthogonal(canvas, pts, to_color(colors_[fill_idx]));
-            for (size_t i = 0; i < pts.size(); ++i) {
-                Rect r = stroke_rect(pts[i], pts[(i + 1) % pts.size()], hw);
+            if (fill_ && sh.closed) fill_orthogonal(canvas, sh.pts, to_color(colors_[fill_idx]));
+            for (int i = 0; i < sh.edge_count(); ++i) {
+                Rect r = stroke_rect(sh.a(i), sh.b(i), hw);
                 canvas.rect({r.x0, r.y0}, {r.x1 - r.x0, r.y1 - r.y0}, col);
             }
         }
     }
 
 private:
-    using Polygon = std::vector<Vec2>;
-
     struct Layout {
-        std::vector<Polygon> polys;
+        std::vector<Shape> shapes;
         int successes = 0; // number of bumps actually added
     };
 
-    // Builds the starting rectangles and runs the extrusion loop. Pure function of
+    // Registered spawners, indexed by spawner_idx_. Adding a method = one more member
+    // and one more entry here.
+    std::array<Spawner*, 2> spawners() { return {&rect_spawner_, &line_spawner_}; }
+    std::array<const Spawner*, 2> spawners() const { return {&rect_spawner_, &line_spawner_}; }
+    Spawner& active() { return *spawners()[static_cast<size_t>(spawner_idx_)]; }
+    const Spawner& active() const { return *spawners()[static_cast<size_t>(spawner_idx_)]; }
+
+    Common common() const { return {width(), height(), edge_width_, margin_, eps_min_, grid_}; }
+
+    // Builds the starting shapes and runs the extrusion loop. Pure function of
     // (parameters, rng); render() and randomize() both use it.
     Layout generate(core::Rng& rng) const {
         Layout out;
         const float W = static_cast<float>(width()), H = static_cast<float>(height());
-        // Centerlines never leave the box inset_ from the border, so the stroke's
-        // outer side stays at least `margin_` from the page edge.
-        const float inset = inset_();
-        // Each polygon is closed: edge i goes from p[i] to p[(i+1) % n].
-        // Rectangle k is inset by k * spacing_ more than the outermost one.
-        for (int k = 0; k < rects_; ++k) {
-            // Corners are snapped onto the grid, rounding towards the page centre
-            // so the margin is never violated.
-            const float o = inset + static_cast<float>(k * spacing_);
-            const float x0 = snap_up(o), y0 = snap_up(o);
-            const float x1 = snap_down(W - o), y1 = snap_down(H - o);
-            if (x1 <= x0 || y1 <= y0) break; // a coarse grid can collapse the inner rectangles
-            out.polys.push_back({{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}});
-        }
-        if (out.polys.empty()) return out; // grid too coarse for this margin: nothing fits
+        const Common c = common();
+        out.shapes = active().spawn(c);
+        if (out.shapes.empty()) return out; // grid too coarse for this margin: nothing fits
 
         for (int iter = 0; iter < max_iters_ && out.successes < target_successes_; ++iter) {
-            if (try_extrude(out.polys, rng, inset, W, H)) ++out.successes;
+            if (try_extrude(out.shapes, rng, c.inset(), W, H)) ++out.successes;
         }
         return out;
     }
 
-    // One attempt: pick an edge (of any polygon), split it in three, replace the
-    // middle by a bump. Returns false (polys untouched) if any constraint fails.
-    bool try_extrude(std::vector<Polygon>& polys, core::Rng& rng, float inset, float W, float H) const {
+    // One attempt: pick an edge (of any shape), split it in three, replace the
+    // middle by a bump. Returns false (shapes untouched) if any constraint fails.
+    bool try_extrude(std::vector<Shape>& shapes, core::Rng& rng, float inset, float W, float H) const {
         int total = 0;
-        for (const Polygon& p : polys) total += static_cast<int>(p.size());
+        for (const Shape& s : shapes) total += s.edge_count();
+        if (total == 0) return false;
         int i = rng.range(0, total - 1);
-        size_t pi = 0;
-        while (i >= static_cast<int>(polys[pi].size())) i -= static_cast<int>(polys[pi++].size());
+        size_t si = 0;
+        while (i >= shapes[si].edge_count()) i -= shapes[si++].edge_count();
 
-        const Polygon& pts = polys[pi];
-        const int n = static_cast<int>(pts.size());
-        const Vec2 A = pts[i], B = pts[(i + 1) % n];
+        const Shape& sh = shapes[si];
+        const Vec2 A = sh.a(i), B = sh.b(i);
         const float L = length(B - A);
 
         // Edges are axis-aligned: exact unit direction, no float drift.
@@ -288,71 +267,56 @@ private:
         for (Vec2 q : {q1, q2})
             if (q.x < inset || q.x > W - inset || q.y < inset || q.y > H - inset) return false;
 
-        // Candidate polygon, then check the 3 new edges against everything else.
-        Polygon next(pts.begin(), pts.begin() + i + 1);
-        next.insert(next.end(), {p1, q1, q2, p2});
-        next.insert(next.end(), pts.begin() + i + 1, pts.end());
+        // Candidate shape, then check the 3 new edges against everything else.
+        Shape next;
+        next.closed = sh.closed;
+        next.pts.assign(sh.pts.begin(), sh.pts.begin() + i + 1);
+        next.pts.insert(next.pts.end(), {p1, q1, q2, p2});
+        next.pts.insert(next.pts.end(), sh.pts.begin() + i + 1, sh.pts.end());
 
-        const int m = static_cast<int>(next.size());
+        const int m = static_cast<int>(next.pts.size());
+        const int ec = next.edge_count();
         const float hw = static_cast<float>(edge_width_) * 0.5f;
         const float eps = static_cast<float>(eps_min_);
         for (int e = i + 1; e <= i + 3; ++e) {          // new edges: p1q1, q1q2, q2p2
-            const Rect re = stroke_rect(next[e], next[(e + 1) % m], hw);
-            for (int o = 0; o < m; ++o) {               // same layer, non-neighbours
+            const Rect re = stroke_rect(next.a(e), next.b(e), hw);
+            for (int o = 0; o < ec; ++o) {              // same shape, non-neighbours
                 if (o == e || (o + 1) % m == e || (e + 1) % m == o) continue;
-                if (rect_gap(re, stroke_rect(next[o], next[(o + 1) % m], hw)) < eps) return false;
+                if (rect_gap(re, stroke_rect(next.a(o), next.b(o), hw)) < eps) return false;
             }
-            if (!no_collide_) continue;                 // layers may overlap: skip other layers
-            for (size_t q = 0; q < polys.size(); ++q) { // every edge of the other layers
-                if (q == pi) continue;
-                const Polygon& other = polys[q];
-                for (size_t o = 0; o < other.size(); ++o)
-                    if (rect_gap(re, stroke_rect(other[o], other[(o + 1) % other.size()], hw)) < eps)
-                        return false;
+            if (!no_collide_) continue;                 // layers may overlap: skip other shapes
+            for (size_t q = 0; q < shapes.size(); ++q) {
+                if (q == si) continue;
+                const Shape& other = shapes[q];
+                for (int o = 0; o < other.edge_count(); ++o)
+                    if (rect_gap(re, stroke_rect(other.a(o), other.b(o), hw)) < eps) return false;
             }
         }
 
-        polys[pi] = std::move(next);
+        shapes[si] = std::move(next);
         return true;
     }
 
-    float inset_() const { return static_cast<float>(margin_) + static_cast<float>(edge_width_) * 0.5f; }
+    int snap_round(int v) const { return common().snap_round(v); }
 
-    int snap_round(int v) const { return ((v + grid_ / 2) / grid_) * grid_; }
-    float snap_up(float v) const { return std::ceil(v / static_cast<float>(grid_)) * static_cast<float>(grid_); }
-    float snap_down(float v) const { return std::floor(v / static_cast<float>(grid_)) * static_cast<float>(grid_); }
-
-    // Centerline distance between neighbouring rectangles: at least stroke width +
-    // epsilon (so the start state is valid), at most what fits in the canvas.
-    std::pair<int, int> spacing_range() const {
-        const int lo = edge_width_ + eps_min_;
-        const int hi = rects_ > 1 ? (room_() - margin_) / (rects_ - 1) : lo;
-        return {lo, std::max(lo, hi)};
-    }
-
-    // Half the short side, minus a minimum 50px for the innermost rectangle.
-    int room_() const { return std::min(width(), height()) / 2 - 50 - (edge_width_ + 1) / 2; }
-
-    // Keep parameters coherent: min <= max, and every rectangle has room.
+    // Keep parameters coherent: min <= max, everything on the grid, and the active
+    // spawner's parameters valid for the shared ones.
     void sanitize() {
         grid_ = std::clamp(grid_, 1, 100);
+        spawner_idx_ = std::clamp(spawner_idx_, 0, static_cast<int>(spawners().size()) - 1);
         // Distances and sizes live on the grid.
         margin_ = snap_round(margin_);
-        spacing_ = snap_round(spacing_);
         l_min_ = std::clamp(snap_round(l_min_), 10, 300);
         d_min_ = std::clamp(snap_round(d_min_), 10, 300);
         d_max_ = std::clamp(snap_round(d_max_), 10, 600);
         d_max_ = std::max(d_max_, d_min_);
-        rects_ = std::clamp(rects_, 1, 4);
-        const int lo = edge_width_ + eps_min_;
-        while (rects_ > 1 && (rects_ - 1) * lo > room_()) --rects_; // doesn't fit: drop rectangles
-        margin_ = std::clamp(margin_, 0, std::max(0, room_() - (rects_ - 1) * lo));
-        auto [sp_lo, sp_hi] = spacing_range();
-        spacing_ = std::clamp(spacing_, sp_lo, sp_hi);
+        active().sanitize(common()); // e.g. drops rectangles that don't fit
+        margin_ = std::clamp(margin_, 0, active().max_margin(common()));
+        active().sanitize(common()); // the margin may have changed
     }
 
     // Randomizes every parameter, or only the ticked ones, and keeps trying until
-    // the result actually contains bumps (not just the bare starting rectangles).
+    // the result actually contains bumps (not just the starting shapes).
     void randomize(bool only_selected) {
         core::Rng r(clock_bits() ^ 0x9e3779b97f4a7c15ULL);
         for (int attempt = 0; attempt < 50; ++attempt) {
@@ -363,7 +327,7 @@ private:
         }
     }
 
-    // Ranges stay coherent (d min <= d max, spacing within what fits) whichever
+    // Ranges stay coherent (d min <= d max, spawner ranges within what fits) whichever
     // subset is chosen.
     void randomize_once(core::Rng& r, bool only_selected) {
         auto on = [&](Param p) { return !only_selected || sel_[p]; };
@@ -371,7 +335,6 @@ private:
         if (on(kGrid)) grid_ = r.range(1, 100);
         if (on(kEdgeWidth)) edge_width_ = r.range(3, 100);
         if (on(kMargin)) margin_ = r.range(0, 150);
-        if (on(kRects)) rects_ = r.range(1, 4);
         if (on(kLMin)) l_min_ = r.range(10, 300);
         if (on(kEps)) eps_min_ = r.range(3, 100);
         if (on(kDMin)) d_min_ = r.range(10, on(kDMax) ? 200 : std::min(200, d_max_));
@@ -380,39 +343,25 @@ private:
         if (on(kMaxIters)) max_iters_ = r.range(2000, 20000);
         if (on(kCollide)) no_collide_ = r.chance(0.5f);
         sanitize();
-        if (on(kSpacing)) {
-            auto [sp_lo, sp_hi] = spacing_range();
-            spacing_ = r.range(sp_lo, sp_hi);
-        }
+        active().randomize(r, common(), only_selected);
         if (on(kFill)) fill_ = r.chance(0.5f);
         if (on(kFillMode)) fill_mode_ = r.range(0, 2);
         if (on(kPalette)) new_colors(r);
     }
 
     void perturb_once(core::Rng& r) {
-        constexpr float kAmount = 0.10f; // max relative change of a perturbed parameter
-        auto nudge = [&](int& v, int lo, int hi, int step) {
-            if (!r.chance(0.5f)) return;
-            int d = static_cast<int>(std::lround(static_cast<float>(v) * r.range(-kAmount, kAmount)));
-            if (std::abs(d) < step) d = r.chance(0.5f) ? step : -step;
-            v = std::clamp(v + d, lo, hi);
-        };
-        nudge(grid_, 1, 100, 1);
-        nudge(edge_width_, 3, 100, 1);
-        if (r.chance(0.5f)) rects_ = std::clamp(rects_ + (r.chance(0.5f) ? 1 : -1), 1, 4);
+        nudge(r, grid_, 1, 100, 1);
+        nudge(r, edge_width_, 3, 100, 1);
         sanitize();
-        nudge(margin_, 0, 300, grid_);
-        nudge(l_min_, 10, 300, grid_);
-        nudge(d_min_, 10, 300, grid_);
-        nudge(d_max_, 10, 600, grid_);
-        nudge(eps_min_, 3, 200, 1);
-        nudge(target_successes_, 1, 500, 1);
-        nudge(max_iters_, 1, 20000, 1);
+        nudge(r, margin_, 0, 300, grid_);
+        nudge(r, l_min_, 10, 300, grid_);
+        nudge(r, d_min_, 10, 300, grid_);
+        nudge(r, d_max_, 10, 600, grid_);
+        nudge(r, eps_min_, 3, 200, 1);
+        nudge(r, target_successes_, 1, 500, 1);
+        nudge(r, max_iters_, 1, 20000, 1);
         sanitize();
-        if (rects_ > 1) {
-            auto [sp_lo, sp_hi] = spacing_range();
-            nudge(spacing_, sp_lo, sp_hi, grid_);
-        }
+        active().perturb(r, common());
         if (r.chance(0.1f)) no_collide_ = !no_collide_;
         if (r.chance(0.1f)) fill_ = !fill_;
         if (r.chance(0.1f)) fill_mode_ = (fill_mode_ + r.range(1, 2)) % 3;
@@ -429,8 +378,10 @@ private:
         fill_seed_ = r.next_u32();
     }
 
+    // Parameters shared by every spawner (each has an "include in Randomize selected"
+    // checkbox; the spawner's own parameters keep theirs inside the spawner).
     enum Param {
-        kEdgeWidth, kMargin, kRects, kSpacing, kLMin, kDMin, kDMax, kEps,
+        kEdgeWidth, kMargin, kLMin, kDMin, kDMax, kEps,
         kGrid, kSuccesses, kMaxIters, kCollide, kFill, kFillMode, kPalette, kParamCount
     };
 
@@ -441,15 +392,8 @@ private:
         kFillOneColor    // one fixed foreground (chosen by fill_seed_) for every layer
     };
 
-    // A checkbox ("include in Randomize selected") to the left of each control.
     bool slider(Param p, const char* label, int* v, int lo, int hi) {
-        ImGui::PushID(p);
-        ImGui::Checkbox("##sel", &sel_[p]);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(190);
-        bool changed = ImGui::SliderInt(label, v, lo, hi);
-        ImGui::PopID();
-        return changed;
+        return sel_slider(&sel_[p], label, v, lo, hi);
     }
 
     // Background swatch followed by the four foreground swatches; each one is
@@ -489,10 +433,13 @@ private:
     bool sel_[kParamCount];
     int w_ = 1080;
     int h_ = 1920;
+
+    RectSpawner rect_spawner_;
+    LineSpawner line_spawner_;
+    int spawner_idx_ = 0;
+
     int edge_width_ = 6;
     int margin_ = 60;
-    int rects_ = 1;
-    int spacing_ = 120;
     int l_min_ = 60;
     int d_min_ = 40;
     int d_max_ = 200;
@@ -511,7 +458,9 @@ private:
     float colors_[5][3] = {}; // [0] background, [1..n_fg_] foregrounds
 };
 
+} // namespace signrec
+
 int main() {
-    Signrec piece;
+    signrec::Signrec piece;
     return core::run(piece);
 }
