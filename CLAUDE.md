@@ -13,7 +13,8 @@ English; the user writes in English or Italian. Keep answers short and concrete.
 
 ```
 CMakeLists.txt            top level: FetchContent deps, add_subdirectory(core), add_subdirectory(pieces)
-cmake/Dependencies.cmake  raylib 5.5, Dear ImGui v1.92.9b, rlImGui main (imgui_rl static lib)
+cmake/Dependencies.cmake  raylib 5.5, Dear ImGui v1.92.9b, rlImGui main (imgui_rl static lib),
+                          delaunator-cpp v0.4.0 (header only, `delaunator` interface target)
 cmake/AddPiece.cmake      add_piece(<name> <sources...>) — one exe per piece, links `core`;
                           on Emscripten it emits an .html using web/shell.html
 core/
@@ -32,16 +33,20 @@ pieces/
     geometry.h            Vec2, Shape (closed/open polyline), stroke_rect, rect_gap, fill, nudge
     spawner.h             Common (shared params view), Spawner interface, sel_slider helper
     spawners.h            RectSpawner (concentric rectangles), LineSpawner (parallel lines)
+  gridpath/
+    main.cpp              GridPath piece: square/hex grid, non-touching random paths
 web/
-  shell.html              the phone page: HTML/CSS/JS around the Emscripten module
-  build.ps1               builds the web target and writes docs/ (stamps cache-busting URLs)
-docs/                     GENERATED static site (index.html, signrec.js, signrec.wasm) — GitHub Pages
+  shell.html              the phone page (shared by all pieces): HTML/CSS/JS around the module
+  build.ps1               builds signrec + gridpath and writes docs/ (stamps cache-busting URLs)
+docs/                     GENERATED static site — GitHub Pages. signrec at the root
+                          (index.html, signrec.js/.wasm), gridpath in docs/gridpath/
 README.md                 project list with links to each piece's live page
 .gitignore                build/, build-web/, out/, exports/, .vs/, imgui.ini
 ```
 
 Git: branch `main`, remote `https://github.com/boris1828/procedurart.git`, GitHub Pages
-serves `main` / `/docs`. Live signrec page: https://boris1828.github.io/procedurart/
+serves `main` / `/docs`. Live pages: https://boris1828.github.io/procedurart/ (signrec),
+https://boris1828.github.io/procedurart/gridpath/
 
 ## Toolchain and environment
 
@@ -77,8 +82,9 @@ Web (phone page):
 ```
 
 - Configures `build-web/` with `emcmake`, `-DPLATFORM=Web`, Ninja, Release, builds the
-  `signrec` target and copies the output to `docs/`. The HTML is stamped with a
-  build-time version on `signrec.js` and `signrec.wasm`.
+  pieces listed in `$pieces` and copies each to `docs/` (signrec) or `docs/<name>/`.
+  The HTML is stamped with a build-time version on `<name>.js` / `.wasm` and with the
+  piece name (`__PIECE__`).
 - Local test server (run from the project root, leave the window open):
   `C:\Users\Work\emsdk\python\3.13.3_64bit\python.exe -m http.server 8000 --directory docs`
   Phone on the same Wi-Fi: `http://<PC Wi-Fi IPv4>:8000`.
@@ -265,8 +271,9 @@ functions with `EMSCRIPTEN_KEEPALIVE`.
   keep an old `.wasm` and run a stale page. `AddPiece.cmake` relinks when `shell.html`
   changes (`LINK_DEPENDS`).
 - Layout: `#gl` is a hidden canvas (raylib needs one for its GL context). `#view` shows
-  the image. The bottom bar holds: grid buttons + palette swatches, spawn method
-  buttons (icons from `SPAWN_ICONS`), and Rand All / Rand Small / Rand Color / download.
+  the image. The bottom bar holds: grid buttons + palette swatches, the piece's method
+  buttons (spawner hooks; label and icons from `METHODS[PIECE]` — signrec: spawn method,
+  gridpath: cell shape), and Rand All / Rand Small / Rand Color / download.
   Tapping the image hides/shows the bar. Monospace font, 44 px touch targets.
 - Emscripten link flags (add_piece): `-sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1
   -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=HEAPU8,FS`.
@@ -311,8 +318,8 @@ afterwards, and stop the local server.
 - The Signrec copy in `perturb()` (`const Signrec before = *this;`) copies the spawner
   objects too. Keep spawners copyable.
 - LNK1104: a running `signrec.exe` locks the output; stop it before rebuilding.
-- `docs/index.html` must keep the `?v=__BUILD__` replacement from `build.ps1`; editing
-  `shell.html` by hand without rebuilding leaves the placeholder in place.
+- `docs/index.html` must keep the `?v=__BUILD__` and `__PIECE__` replacements from
+  `build.ps1`; editing `shell.html` by hand without rebuilding leaves the placeholders in place.
 - `git` prints CRLF warnings on this machine. They are harmless.
 
 ## Not yet done / ideas

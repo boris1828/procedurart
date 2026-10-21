@@ -30,3 +30,17 @@ add_library(imgui_rl STATIC
     ${rlimgui_SOURCE_DIR}/rlImGui.cpp)
 target_include_directories(imgui_rl PUBLIC ${imgui_SOURCE_DIR} ${rlimgui_SOURCE_DIR})
 target_link_libraries(imgui_rl PUBLIC raylib)
+
+# --- delaunator (header-only Delaunay triangulation) -------------------------
+# Only the header is fetched: the upstream CMake file pulls in mason and test deps.
+FetchContent_Declare(delaunator
+    GIT_REPOSITORY https://github.com/delfrrr/delaunator-cpp.git
+    GIT_TAG v0.4.0
+    GIT_SHALLOW TRUE)
+cmake_policy(SET CMP0169 OLD) # allow populating without MakeAvailable (see above)
+FetchContent_GetProperties(delaunator)
+if(NOT delaunator_POPULATED)
+    FetchContent_Populate(delaunator)
+endif()
+add_library(delaunator INTERFACE)
+target_include_directories(delaunator INTERFACE ${delaunator_SOURCE_DIR}/include)

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>procedurart</title>
+<title>__PIECE__ · procedurart</title>
 <style>
   :root { color-scheme: dark; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   html, body { margin: 0; height: 100%; background: #111; overflow: hidden; touch-action: manipulation; }
@@ -51,7 +51,7 @@
     <div id="pal"></div>
   </div>
   <div class="row">
-    <span class="label">Spawn:</span>
+    <span class="label" id="methodLabel"></span>
     <span id="spawn" class="row" style="gap:8px"></span>
   </div>
   <div class="row main">
@@ -70,11 +70,20 @@
   const ctx = view.getContext('2d');
   let ready = false, grid = 1;
 
-  // One icon per spawn method, in the order the piece lists them.
-  const SPAWN_ICONS = [
-    '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><rect x="8" y="8" width="8" height="8"/></svg>', // rectangles
-    '<svg viewBox="0 0 24 24"><path d="M3 5h18M3 12h18M3 19h18"/></svg>',                                              // lines
-  ];
+  // web/build.ps1 stamps the piece name. Each piece names its switchable method (the
+  // piece's spawner hooks) and gives one icon per option, in the order the piece lists them.
+  const PIECE = '__PIECE__';
+  const METHODS = {
+    signrec: { label: 'Spawn:', icons: [
+      '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><rect x="8" y="8" width="8" height="8"/></svg>', // rectangles
+      '<svg viewBox="0 0 24 24"><path d="M3 5h18M3 12h18M3 19h18"/></svg>',                                              // lines
+    ] },
+    gridpath: { label: 'Grid:', icons: [
+      '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/></svg>',                                        // square
+      '<svg viewBox="0 0 24 24"><polygon points="12,2.5 20.2,7.25 20.2,16.75 12,21.5 3.8,16.75 3.8,7.25"/></svg>',        // hexagon
+    ] },
+  }[PIECE] || { label: 'Method:', icons: [] };
+  document.getElementById('methodLabel').textContent = METHODS.label;
 
   // Physical pixels of the screen, capped so huge displays stay fast.
   function screenPx() {
@@ -165,7 +174,7 @@
         for (let i = 0; i < Module._web_spawner_count(); i++) {
           const b = document.createElement('button');
           b.style.width = '56px';
-          b.innerHTML = SPAWN_ICONS[i] || String(i + 1);
+          b.innerHTML = METHODS.icons[i] || String(i + 1);
           b.onclick = () => act(() => Module._web_set_spawner(i));
           spawn.appendChild(b);
         }
