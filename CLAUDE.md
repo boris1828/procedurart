@@ -35,18 +35,20 @@ pieces/
     spawners.h            RectSpawner (concentric rectangles), LineSpawner (parallel lines)
   gridpath/
     main.cpp              GridPath piece: square/hex grid, non-touching random paths
+  spideye/
+    main.cpp              SpiderEye piece: mirrored sets of circles and ellipses in a grid
 web/
   shell.html              the phone page (shared by all pieces): HTML/CSS/JS around the module
-  build.ps1               builds signrec + gridpath and writes docs/ (stamps cache-busting URLs)
+  build.ps1               builds signrec, gridpath and spideye, writes docs/ (stamps URLs)
 docs/                     GENERATED static site — GitHub Pages. signrec at the root
-                          (index.html, signrec.js/.wasm), gridpath in docs/gridpath/
+                          (index.html, signrec.js/.wasm), gridpath and spideye in docs/<name>/
 README.md                 project list with links to each piece's live page
 .gitignore                build/, build-web/, out/, exports/, .vs/, imgui.ini
 ```
 
 Git: branch `main`, remote `https://github.com/boris1828/procedurart.git`, GitHub Pages
 serves `main` / `/docs`. Live pages: https://boris1828.github.io/procedurart/ (signrec),
-https://boris1828.github.io/procedurart/gridpath/
+https://boris1828.github.io/procedurart/gridpath/, https://boris1828.github.io/procedurart/spideye/
 
 ## Toolchain and environment
 

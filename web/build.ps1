@@ -5,7 +5,7 @@ $env:EMSDK_QUIET = '1'
 $emsdk = if ($env:EMSDK_DIR) { $env:EMSDK_DIR } else { 'C:\Users\Work\emsdk' }
 . "$emsdk\emsdk_env.ps1" *> $null
 
-$pieces = 'signrec', 'gridpath'
+$pieces = 'signrec', 'gridpath', 'spideye'
 $root = Split-Path $PSScriptRoot -Parent
 $build = Join-Path $root 'build-web'
 emcmake cmake -S $root -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPLATFORM=Web
