@@ -181,6 +181,10 @@ private:
         ImGui::SeparatorText("Parameters");
         piece_.set_seed(seed_);
         if (piece_.ui()) dirty_ = true;
+        if (piece_.take_seed_request()) {
+            seed_ = static_cast<uint32_t>(GetRandomValue(0, 0x7fffffff));
+            dirty_ = true;
+        }
 
         ImGui::SeparatorText("Export");
         if (ImGui::Button("Save PNG")) {

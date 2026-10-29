@@ -44,8 +44,20 @@ public:
     void set_seed(uint32_t seed) { seed_ = seed; }
     uint32_t seed() const { return seed_; }
 
+    // Desktop: a piece's ui() can ask for a fresh seed, e.g. after its own Randomize all.
+    // The app checks this once after ui() returns and clears it.
+    bool take_seed_request() {
+        const bool requested = seed_request_;
+        seed_request_ = false;
+        return requested;
+    }
+
+protected:
+    void request_seed() { seed_request_ = true; }
+
 private:
     uint32_t seed_ = 1;
+    bool seed_request_ = false;
 };
 
 // Opens the window and runs the main loop until it is closed.
