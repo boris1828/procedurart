@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>procedurart</title>
+<style>
+  :root { color-scheme: dark; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  html, body { margin: 0; background: #111; color: #fff; font: 14px var(--mono); }
+  body { padding: calc(16px + env(safe-area-inset-top)) 16px 16px; box-sizing: border-box; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  /* Each card is a link. The frame inside shows a fresh random piece on every page load. */
+  a.card { position: relative; display: block; aspect-ratio: 3 / 4; border-radius: 14px; overflow: hidden;
+           background: #222; color: #fff; text-decoration: none; }
+  a.card iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <a class="card" href="../signrec/"><iframe src="../signrec/?thumb" scrolling="no" tabindex="-1" title="signrec"></iframe></a>
+  <a class="card" href="../gridpath/"><iframe src="../gridpath/?thumb" scrolling="no" tabindex="-1" title="gridpath"></iframe></a>
+  <a class="card" href="../spideye/"><iframe src="../spideye/?thumb" scrolling="no" tabindex="-1" title="spideye"></iframe></a>
+</div>
+</body>
+</html>

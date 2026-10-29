@@ -106,6 +106,14 @@ public:
         size_pct_ = std::clamp(size_pct_ + r.range(-5, 5), 50, 90);
     }
 
+    // Foregrounds first, then the background, as the web page's swatches expect.
+    int palette(core::Color* out, int max) const override {
+        int n = 0;
+        for (int i = 1; i <= 1 + n_var_ && n < max; ++i) out[n++] = to_color(colors_[i]);
+        if (n < max) out[n++] = to_color(colors_[0]);
+        return n;
+    }
+
     void render(core::Canvas& canvas, core::Rng& rng) override {
         canvas.clear(to_color(colors_[0]));
 

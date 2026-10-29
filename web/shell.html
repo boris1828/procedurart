@@ -39,6 +39,7 @@
   .main button.icon { flex: none; width: 56px; }
   #busy { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 12px;
           border-radius: 99px; background: rgba(0,0,0,.6); color: #fff; font: 13px var(--mono); display: none; }
+  body.thumb #bar { display: none; } /* ?thumb: the home page shows the art only */
 </style>
 </head>
 <body>
@@ -64,6 +65,7 @@
   </div>
 </div>
 <script>
+  if (location.search.includes('thumb')) document.body.classList.add('thumb');
   const view = document.getElementById('view');
   const bar = document.getElementById('bar');
   const busy = document.getElementById('busy');
@@ -82,7 +84,7 @@
       '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/></svg>',                                        // square
       '<svg viewBox="0 0 24 24"><polygon points="12,2.5 20.2,7.25 20.2,16.75 12,21.5 3.8,16.75 3.8,7.25"/></svg>',        // hexagon
     ] },
-    spideye: { label: '', icons: [] },
+    spideye: { label: '', icons: [], grid: false, square: true }, // its own grid size; draws a square
   }[PIECE] || { label: 'Method:', icons: [] };
   document.getElementById('methodLabel').textContent = METHODS.label;
 
@@ -131,6 +133,7 @@
   }
 
   const gridRow = document.getElementById('grid');
+  if (METHODS.grid === false) gridRow.style.display = 'none';
   for (let n = 1; n <= 5; n++) {
     const b = document.createElement('button');
     b.textContent = n + 'x' + n;
@@ -146,13 +149,21 @@
   document.getElementById('pert').onclick = () => act(() => Module._web_perturb());
   document.getElementById('col').onclick = () => act(() => Module._web_randomize_colors());
   document.getElementById('png').onclick = () => {
-    if (!ready || !Module._web_save_png()) return;
-    const data = Module.FS.readFile('/art.png');
+    if (!ready) return;
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([data], { type: 'image/png' }));
     a.download = 'procedurart-' + Date.now() + '.png';
+    if (METHODS.square) {
+      // The piece draws a centred square: keep only that part of the shown image.
+      const s = Math.min(view.width, view.height), c = document.createElement('canvas');
+      c.width = c.height = s;
+      c.getContext('2d').drawImage(view, (view.width - s) / 2, (view.height - s) / 2, s, s, 0, 0, s, s);
+      a.href = c.toDataURL('image/png');
+    } else {
+      if (!Module._web_save_png()) return;
+      a.href = URL.createObjectURL(new Blob([Module.FS.readFile('/art.png')], { type: 'image/png' }));
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
     a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
   // Tap the art to hide/show the controls.
   view.onclick = () => bar.classList.toggle('hidden');

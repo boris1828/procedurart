@@ -40,15 +40,15 @@ pieces/
 web/
   shell.html              the phone page (shared by all pieces): HTML/CSS/JS around the module
   build.ps1               builds signrec, gridpath and spideye, writes docs/ (stamps URLs)
-docs/                     GENERATED static site — GitHub Pages. signrec at the root
-                          (index.html, signrec.js/.wasm), gridpath and spideye in docs/<name>/
+docs/                     GENERATED static site — GitHub Pages. docs/home/ is the showcase page,
+                          docs/<name>/ holds each piece (index.html, <name>.js/.wasm); docs/ redirects home
 README.md                 project list with links to each piece's live page
 .gitignore                build/, build-web/, out/, exports/, .vs/, imgui.ini
 ```
 
 Git: branch `main`, remote `https://github.com/boris1828/procedurart.git`, GitHub Pages
-serves `main` / `/docs`. Live pages: https://boris1828.github.io/procedurart/ (signrec),
-https://boris1828.github.io/procedurart/gridpath/, https://boris1828.github.io/procedurart/spideye/
+serves `main` / `/docs`. Live pages: https://boris1828.github.io/procedurart/home (showcase),
+signrec, gridpath and spideye under https://boris1828.github.io/procedurart/<name>/
 
 ## Toolchain and environment
 
@@ -84,7 +84,7 @@ Web (phone page):
 ```
 
 - Configures `build-web/` with `emcmake`, `-DPLATFORM=Web`, Ninja, Release, builds the
-  pieces listed in `$pieces` and copies each to `docs/` (signrec) or `docs/<name>/`.
+  pieces listed in `$pieces` and copies each to `docs/<name>/`, plus docs/home/.
   The HTML is stamped with a build-time version on `<name>.js` / `.wasm` and with the
   piece name (`__PIECE__`).
 - Local test server (run from the project root, leave the window open):
