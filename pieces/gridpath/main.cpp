@@ -18,9 +18,12 @@ constexpr float kSqrt3 = 1.73205081f;
 constexpr float kPi = 3.14159265f;
 enum Shape { kSquare, kHexagon };
 // How a filled cell is drawn: its shape, the circle inside it, the shape with a
-// background-colored hole that leaves a margin to the edge, or the circle with that hole.
-enum Fill { kShape, kCircle, kHole, kCircleHole };
+// background-colored hole that leaves a margin to the edge, the circle with that hole,
+// the half-square curve on a path's turns, a bar along the path, or the bar with an L on
+// the turns (square cells only).
+enum Fill { kShape, kCircle, kHole, kCircleHole, kCurve, kBar, kElbow };
 constexpr float kHoleRatio = 0.7f; // hole radius as a share of the inscribed circle
+constexpr float kBarRatio = 0.4f;  // bar width as a share of its length
 
 uint8_t to_byte(float v) { return static_cast<uint8_t>(v * 255.0f + 0.5f); }
 core::Color to_color(const float c[3]) { return {to_byte(c[0]), to_byte(c[1]), to_byte(c[2])}; }
@@ -40,13 +43,13 @@ struct Grid {
 
 // Grid of square or hexagonal cells. Each path starts on a random free cell and grows
 // through neighbouring cells, keeping one empty cell between itself and every other
-// path. A filled cell is drawn in one of four ways (Fill); the piece picks one at random.
+// path. A filled cell is drawn in one of seven ways (Fill); the piece picks one at random.
 class GridPath : public core::Piece {
 public:
     GridPath() {
         core::Rng r(7);
         set_palette(core::random_palette(r));
-        fill_ = static_cast<Fill>(r.range(kShape, kCircleHole));
+        fill_ = static_cast<Fill>(r.range(kShape, kElbow));
     }
 
     const char* name() const override { return "gridpath"; }
@@ -93,7 +96,7 @@ public:
         max_len_ = r.range(2, 40);
         min_len_ = r.range(1, max_len_);
         inset_ = r.range(50, 95);
-        fill_ = static_cast<Fill>(r.range(kShape, kCircleHole));
+        fill_ = static_cast<Fill>(r.range(kShape, kElbow));
         set_palette(core::random_palette(r));
     }
 
@@ -140,8 +143,20 @@ public:
             if (paths.owner[cell] == kEmpty) continue;
             const std::vector<core::Vec2>& poly = g.outline[cell];
             const core::Color fill = pal.foreground[paths.color[paths.owner[cell]]];
-            if (fill_ == kShape) {
+            if (fill_ == kShape || (shape_ == kHexagon && (fill_ == kCurve || fill_ == kBar || fill_ == kElbow))) {
                 canvas.polygon(poly, fill);
+                continue;
+            }
+            if (fill_ == kCurve) {
+                draw_curve(canvas, g, paths, cell, fill);
+                continue;
+            }
+            if (fill_ == kBar) {
+                draw_bar(canvas, g, paths, cell, fill);
+                continue;
+            }
+            if (fill_ == kElbow) {
+                draw_elbow(canvas, g, paths, cell, fill);
                 continue;
             }
 
@@ -224,6 +239,93 @@ private:
             }
         }
         return g;
+    }
+
+    // A square cell where the path turns (one horizontal and one vertical link) is filled
+    // with the half-square that holds the turn's corner and both linked sides, so it joins
+    // its neighbours along the edges. Straight cells and path ends stay full squares.
+    static void draw_curve(core::Canvas& canvas, const Grid& g, const Paths& paths, size_t cell, core::Color fill) {
+        const std::vector<core::Vec2>& poly = g.outline[cell];
+        const int links = links_of(g, paths, cell);
+        if (!(links & 0b0011) || !(links & 0b1100)) {
+            canvas.polygon(poly, fill);
+            return;
+        }
+        // Corners of each side; poly runs top-left, top-right, bottom-right, bottom-left.
+        static constexpr int kSideCorners[4] = {0b1001, 0b0110, 0b0011, 0b1100};
+        int mask = 0;
+        for (int s = 0; s < 4; ++s)
+            if ((links >> s) & 1) mask |= kSideCorners[s];
+        core::Vec2 t[3];
+        int k = 0;
+        for (int i = 0; i < 4; ++i)
+            if ((mask >> i) & 1) t[k++] = poly[i];
+        canvas.triangle(t[0], t[1], t[2], fill);
+    }
+
+    // Link bits: 0 west, 1 east, 2 north, 3 south. A link is a path neighbour across a side.
+    static int links_of(const Grid& g, const Paths& paths, size_t cell) {
+        int links = 0;
+        for (const Nb& nb : g.nb[cell]) {
+            if (!nb.side || paths.owner[nb.cell] != paths.owner[cell]) continue;
+            const int d = nb.cell - static_cast<int>(cell);
+            links |= 1 << (d == -1 ? 0 : d == 1 ? 1 : d < 0 ? 2 : 3);
+        }
+        return links;
+    }
+
+    // A bar through the cell's centre along the path: from the midpoint of the first linked
+    // side to the midpoint of the second (the centre stands in for a missing link). Its length
+    // is the inset side, so it touches the sides at 100% inset.
+    static void draw_bar(core::Canvas& canvas, const Grid& g, const Paths& paths, size_t cell, core::Color fill) {
+        const std::vector<core::Vec2>& poly = g.outline[cell]; // top-left, top-right, bottom-right, bottom-left
+        auto mid = [](core::Vec2 a, core::Vec2 b) { return core::Vec2{(a.x + b.x) / 2, (a.y + b.y) / 2}; };
+        const core::Vec2 centre = mid(poly[0], poly[2]);
+        const core::Vec2 side[4] = {mid(poly[0], poly[3]), mid(poly[1], poly[2]), mid(poly[0], poly[1]), mid(poly[2], poly[3])};
+        const int links = links_of(g, paths, cell);
+        core::Vec2 end[2] = {centre, centre};
+        int k = 0;
+        for (int s = 0; s < 4; ++s)
+            if ((links >> s) & 1) end[k++] = side[s];
+
+        float dx = end[0].x - end[1].x, dy = end[0].y - end[1].y;
+        float len = std::hypot(dx, dy);
+        if (len == 0) { // no links: a horizontal bar
+            dx = 1;
+            dy = 0;
+            len = 1;
+        }
+        const float ux = dx / len, uy = dy / len; // along the bar
+        const float hl = std::hypot(poly[1].x - poly[0].x, poly[1].y - poly[0].y) / 2; // half the inset side
+        const float ht = kBarRatio * hl;                                             // half the width
+        // Point at `a` along the bar and `b` across it.
+        auto at = [&](float a, float b) { return core::Vec2{centre.x + a * ux - b * uy, centre.y + a * uy + b * ux}; };
+        const core::Vec2 corners[4] = {at(hl, ht), at(hl, -ht), at(-hl, -ht), at(-hl, ht)};
+        canvas.polygon(corners, fill);
+    }
+
+    // A turn cell gets an L: each linked side has an arm from the centre out to that side,
+    // reaching half a width past the centre so the two arms meet in a square corner.
+    // Other cells get the bar.
+    static void draw_elbow(core::Canvas& canvas, const Grid& g, const Paths& paths, size_t cell, core::Color fill) {
+        const int links = links_of(g, paths, cell);
+        if (!(links & 0b0011) || !(links & 0b1100)) {
+            draw_bar(canvas, g, paths, cell, fill);
+            return;
+        }
+        const std::vector<core::Vec2>& poly = g.outline[cell];
+        const core::Vec2 centre{(poly[0].x + poly[2].x) / 2, (poly[0].y + poly[2].y) / 2};
+        const float hl = std::hypot(poly[1].x - poly[0].x, poly[1].y - poly[0].y) / 2; // half the inset side
+        const float ht = kBarRatio * hl;                                             // half the width
+        const core::Vec2 dir[4] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};                  // west, east, north, south
+        for (int s = 0; s < 4; ++s) {
+            if (!((links >> s) & 1)) continue;
+            const core::Vec2 d = dir[s], p{-d.y, d.x};
+            // Point `t` along the arm and `w` across it.
+            auto at = [&](float t, float w) { return core::Vec2{centre.x + t * d.x + w * p.x, centre.y + t * d.y + w * p.y}; };
+            const core::Vec2 arm[4] = {at(-ht, ht), at(hl, ht), at(hl, -ht), at(-ht, -ht)};
+            canvas.polygon(arm, fill);
+        }
     }
 
     // One start per cell on average is enough to fill the grid; a start on a
