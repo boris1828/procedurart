@@ -1,15 +1,12 @@
 #include "core/palette.h"
 #include "core/piece.h"
 
-#include <delaunator.hpp>
 #include <imgui.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <stdexcept>
 #include <vector>
 
 namespace gridpath {
@@ -19,20 +16,14 @@ namespace {
 constexpr int kEmpty = -1;
 constexpr float kSqrt3 = 1.73205081f;
 constexpr float kPi = 3.14159265f;
-enum Shape { kSquare, kHexagon, kTriangle };
+enum Shape { kSquare, kHexagon };
+// How a filled cell is drawn: its shape, the circle inside it, the shape with a
+// background-colored hole that leaves a margin to the edge, or the circle with that hole.
+enum Fill { kShape, kCircle, kHole, kCircleHole };
+constexpr float kHoleRatio = 0.7f; // hole radius as a share of the inscribed circle
 
 uint8_t to_byte(float v) { return static_cast<uint8_t>(v * 255.0f + 0.5f); }
 core::Color to_color(const float c[3]) { return {to_byte(c[0]), to_byte(c[1]), to_byte(c[2])}; }
-
-// Smallest corner of a triangle, in degrees.
-float min_angle(core::Vec2 a, core::Vec2 b, core::Vec2 c) {
-    auto ang = [](core::Vec2 p, core::Vec2 q, core::Vec2 r) {
-        const float ux = q.x - p.x, uy = q.y - p.y, vx = r.x - p.x, vy = r.y - p.y;
-        const float cosv = (ux * vx + uy * vy) / (std::sqrt(ux * ux + uy * uy) * std::sqrt(vx * vx + vy * vy) + 1e-9f);
-        return std::acos(std::clamp(cosv, -1.0f, 1.0f)) * 180.0f / kPi;
-    };
-    return std::min({ang(a, b, c), ang(b, c, a), ang(c, a, b)});
-}
 
 struct Nb {
     int cell;
@@ -47,14 +38,15 @@ struct Grid {
 
 } // namespace
 
-// Grid of square, hexagonal or triangular cells. Each path starts on a random free
-// cell and grows through neighbouring cells, keeping one empty cell between itself
-// and every other path.
+// Grid of square or hexagonal cells. Each path starts on a random free cell and grows
+// through neighbouring cells, keeping one empty cell between itself and every other
+// path. A filled cell is drawn in one of four ways (Fill); the piece picks one at random.
 class GridPath : public core::Piece {
 public:
     GridPath() {
         core::Rng r(7);
         set_palette(core::random_palette(r));
+        fill_ = static_cast<Fill>(r.range(kShape, kCircleHole));
     }
 
     const char* name() const override { return "gridpath"; }
@@ -65,8 +57,7 @@ public:
         h_ = h;
     }
 
-    // The web page's spawn-method buttons pick the grid shape. Triangles are left out
-    // for now (the mesh is not right yet), so only square and hexagon are offered.
+    // The web page's spawn-method buttons pick the grid shape.
     int spawner_count() const override { return 2; }
     int spawner() const override { return shape_; }
     void set_spawner(int index) override { shape_ = std::clamp(index, 0, spawner_count() - 1); }
@@ -91,7 +82,7 @@ public:
         nudge(max_len_, 1, 200);
         nudge(min_len_, 1, max_len_);
         min_len_ = std::min(min_len_, max_len_);
-        if (r.chance(0.5f)) scale_ = std::clamp(scale_ + 0.1f * (r.uniform() - 0.5f), 0.5f, 1.0f);
+        nudge(inset_, 50, 95);
     }
 
     // The grid shape is picked by hand, like signrec's spawn method.
@@ -101,8 +92,8 @@ public:
         margin_ = r.range(0, 100);
         max_len_ = r.range(2, 40);
         min_len_ = r.range(1, max_len_);
-        shrink_ = r.chance(0.5f);
-        scale_ = 0.5f + 0.5f * r.uniform();
+        inset_ = r.range(50, 95);
+        fill_ = static_cast<Fill>(r.range(kShape, kCircleHole));
         set_palette(core::random_palette(r));
     }
 
@@ -111,17 +102,12 @@ public:
         c |= ImGui::RadioButton("Square", &shape_, kSquare);
         ImGui::SameLine();
         c |= ImGui::RadioButton("Hexagon", &shape_, kHexagon);
-        // Triangles (kTriangle) are switched off until the mesh looks right.
         c |= ImGui::SliderInt("Grid density", &density_, 2, 20);
         c |= ImGui::SliderInt("Margin", &margin_, 0, 100);
         c |= ImGui::SliderInt("Max path length", &max_len_, 1, 200);
         min_len_ = std::min(min_len_, max_len_);
         c |= ImGui::SliderInt("Min path length", &min_len_, 1, max_len_);
-
-        c |= ImGui::Checkbox("Shrink cells", &shrink_);
-        ImGui::BeginDisabled(!shrink_);
-        c |= ImGui::SliderFloat("Cell scale", &scale_, 0.5f, 1.0f);
-        ImGui::EndDisabled();
+        c |= ImGui::SliderInt("Inset", &inset_, 50, 95, "%d%%");
 
         c |= palette_row();
         if (ImGui::Button("Randomize colors")) {
@@ -143,7 +129,7 @@ public:
         // The grid is laid out inside the margin, then moved by it.
         const float m = static_cast<float>(margin_);
         const float W = static_cast<float>(canvas.width()), H = static_cast<float>(canvas.height());
-        Grid g = build_grid(rng, W - 2 * m, H - 2 * m, shrink_ ? scale_ : 1.0f);
+        Grid g = build_lattice(W - 2 * m, H - 2 * m, inset_ / 100.0f);
         for (std::vector<core::Vec2>& poly : g.outline)
             for (core::Vec2& v : poly) {
                 v.x += m;
@@ -152,7 +138,23 @@ public:
         const Paths paths = grow(rng, g, pal.foreground_count);
         for (size_t cell = 0; cell < g.outline.size(); ++cell) {
             if (paths.owner[cell] == kEmpty) continue;
-            canvas.polygon(g.outline[cell], pal.foreground[paths.color[paths.owner[cell]]]);
+            const std::vector<core::Vec2>& poly = g.outline[cell];
+            const core::Color fill = pal.foreground[paths.color[paths.owner[cell]]];
+            if (fill_ == kShape) {
+                canvas.polygon(poly, fill);
+                continue;
+            }
+
+            // Centre: the midpoint of two opposite corners. Radius: centre to the middle of a
+            // side, which is the inscribed circle of a square or hexagon.
+            const core::Vec2 a = poly[0], b = poly[1], opposite = poly[poly.size() / 2];
+            const core::Vec2 c{(a.x + opposite.x) / 2, (a.y + opposite.y) / 2};
+            const core::Vec2 side{(a.x + b.x) / 2, (a.y + b.y) / 2};
+            const float r = std::hypot(side.x - c.x, side.y - c.y);
+            const bool round = fill_ == kCircle || fill_ == kCircleHole;
+            if (round) canvas.circle(c, r, fill);
+            else canvas.polygon(poly, fill);
+            if (fill_ == kHole || fill_ == kCircleHole) canvas.circle(c, kHoleRatio * r, pal.background);
         }
     }
 
@@ -161,10 +163,6 @@ private:
         std::vector<int> owner; // path index per cell, or kEmpty
         std::vector<int> color; // foreground index per path
     };
-
-    Grid build_grid(core::Rng& rng, float W, float H, float scale) const {
-        return shape_ == kTriangle ? build_triangles(rng, W, H, scale) : build_lattice(W, H, scale);
-    }
 
     // Columns follow the density across the width. Squares (side W / cols) and hexagons
     // then fit as many rows as the height allows, so cells keep their shape on any canvas.
@@ -226,159 +224,6 @@ private:
             }
         }
         return g;
-    }
-
-    // Each Delaunay triangle is a cell. Neighbours are triangles sharing an edge (side)
-    // or only a corner.
-    static std::vector<double> flatten(const std::vector<core::Vec2>& pts) {
-        std::vector<double> coords;
-        for (const core::Vec2& p : pts) {
-            coords.push_back(p.x);
-            coords.push_back(p.y);
-        }
-        return coords;
-    }
-
-    // Flat triangles (a corner under 15 degrees) come from near-collinear points, mostly
-    // along the edge. Dropping one point of each and re-triangulating removes them. Hull
-    // points go too when a sliver has no interior corner, so the hull can shrink a little.
-    // shortcut: 8 passes leave about 1% slivers (22 of 2072 in the test), more passes if they show.
-    void drop_slivers(std::vector<core::Vec2>& pts) const {
-        for (int pass = 0; pass < 8; ++pass) {
-            std::vector<double> coords = flatten(pts);
-            const delaunator::Delaunator d(coords);
-            std::vector<bool> hull(pts.size(), false), drop(pts.size(), false);
-            for (size_t e = 0; e < d.halfedges.size(); ++e)
-                if (d.halfedges[e] == delaunator::INVALID_INDEX) {
-                    hull[d.triangles[e]] = true;
-                    hull[d.triangles[e % 3 == 2 ? e - 2 : e + 1]] = true;
-                }
-            bool any = false;
-            for (size_t t = 0; t + 2 < d.triangles.size(); t += 3) {
-                const std::size_t v[3] = {d.triangles[t], d.triangles[t + 1], d.triangles[t + 2]};
-                if (min_angle(pts[v[0]], pts[v[1]], pts[v[2]]) >= 15.0f) continue;
-                std::size_t pick = v[0];
-                for (std::size_t x : v)
-                    if (!hull[x]) {
-                        pick = x;
-                        break;
-                    }
-                drop[pick] = any = true;
-            }
-            if (!any) return;
-
-            std::vector<core::Vec2> kept;
-            for (size_t i = 0; i < pts.size(); ++i)
-                if (!drop[i]) kept.push_back(pts[i]);
-            std::vector<double> kept_coords = flatten(kept);
-            try {
-                const delaunator::Delaunator check(kept_coords);
-            } catch (const std::runtime_error&) {
-                return; // the removal left degenerate points: keep the last good set
-            }
-            pts = kept;
-        }
-    }
-
-    Grid build_triangles(core::Rng& rng, float W, float H, float scale) const {
-        std::vector<core::Vec2> pts = blue_noise(rng, W, H);
-        Grid g;
-        if (pts.size() < 3) return g; // shortcut: no triangles from fewer than 3 points, only tiny canvases
-        drop_slivers(pts);
-
-        std::vector<double> coords;
-        for (const core::Vec2& p : pts) {
-            coords.push_back(p.x);
-            coords.push_back(p.y);
-        }
-        const delaunator::Delaunator d(coords);
-        const int T = static_cast<int>(d.triangles.size() / 3);
-        std::vector<std::vector<int>> around(pts.size()); // triangles touching each point
-        for (int t = 0; t < T; ++t)
-            for (int k = 0; k < 3; ++k) around[d.triangles[3 * t + k]].push_back(t);
-
-        g.outline.resize(T);
-        g.nb.resize(T);
-        std::vector<int> seen(T, -1);
-        for (int t = 0; t < T; ++t) {
-            std::array<core::Vec2, 3> v;
-            for (int k = 0; k < 3; ++k) v[k] = pts[d.triangles[3 * t + k]];
-            const core::Vec2 c{(v[0].x + v[1].x + v[2].x) / 3, (v[0].y + v[1].y + v[2].y) / 3};
-            for (const core::Vec2& p : v) g.outline[t].push_back({c.x + scale * (p.x - c.x), c.y + scale * (p.y - c.y)});
-
-            std::vector<Nb>& nb = g.nb[t];
-            for (int k = 0; k < 3; ++k)
-                for (int u : around[d.triangles[3 * t + k]])
-                    if (u != t && seen[u] != t) {
-                        seen[u] = t;
-                        nb.push_back({u, false});
-                    }
-            for (int k = 0; k < 3; ++k) {
-                const std::size_t h = d.halfedges[3 * t + k];
-                if (h == delaunator::INVALID_INDEX) continue; // hull edge, no triangle beyond it
-                for (Nb& n : nb)
-                    if (n.cell == static_cast<int>(h / 3)) n.side = true;
-            }
-        }
-        return g;
-    }
-
-    // Bridson's blue noise over the square. Random samples on the boundary seed the
-    // growth; no two points are closer than the spacing (width / density).
-    std::vector<core::Vec2> blue_noise(core::Rng& rng, float W, float H) const {
-        const float r = W / density_;
-        const float cs = r / std::sqrt(2.0f); // one point per grid cell at most
-        const int gw = static_cast<int>(W / cs) + 1, gh = static_cast<int>(H / cs) + 1;
-        std::vector<int> at(gw * gh, -1);
-        std::vector<core::Vec2> pts;
-        std::vector<int> active;
-        auto fits = [&](core::Vec2 p) {
-            const int gx = static_cast<int>(p.x / cs), gy = static_cast<int>(p.y / cs);
-            for (int y = std::max(0, gy - 2); y <= std::min(gh - 1, gy + 2); ++y)
-                for (int x = std::max(0, gx - 2); x <= std::min(gw - 1, gx + 2); ++x) {
-                    const int i = at[y * gw + x];
-                    if (i < 0) continue;
-                    const float dx = pts[i].x - p.x, dy = pts[i].y - p.y;
-                    if (dx * dx + dy * dy < r * r) return false;
-                }
-            return true;
-        };
-        auto add = [&](core::Vec2 p) {
-            at[static_cast<int>(p.y / cs) * gw + static_cast<int>(p.x / cs)] = static_cast<int>(pts.size());
-            active.push_back(static_cast<int>(pts.size()));
-            pts.push_back(p);
-        };
-
-        for (int i = 0; i < 8 * density_; ++i) {
-            const int side = rng.range(0, 3);
-            const float u = rng.uniform();
-            // Pushed a little toward the centre, so the seeds don't lie exactly on the edge.
-            const float in = r * 0.25f * rng.uniform();
-            const core::Vec2 p = side == 0   ? core::Vec2{u * W, in}
-                               : side == 1 ? core::Vec2{W - in, u * H}
-                               : side == 2 ? core::Vec2{u * W, H - in}
-                                           : core::Vec2{in, u * H};
-            if (fits(p)) add(p);
-        }
-        while (!active.empty()) {
-            const int k = rng.range(0, static_cast<int>(active.size()) - 1);
-            const core::Vec2 o = pts[active[k]];
-            bool placed = false;
-            for (int attempt = 0; attempt < 30 && !placed; ++attempt) {
-                const float a = rng.uniform() * 2 * kPi;
-                const float d = r * (1 + rng.uniform());
-                const core::Vec2 p{o.x + d * std::cos(a), o.y + d * std::sin(a)};
-                if (p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H && fits(p)) {
-                    add(p);
-                    placed = true;
-                }
-            }
-            if (!placed) {
-                active[k] = active.back();
-                active.pop_back();
-            }
-        }
-        return pts;
     }
 
     // One start per cell on average is enough to fill the grid; a start on a
@@ -476,8 +321,8 @@ private:
     int margin_ = 0;
     int max_len_ = 12;
     int min_len_ = 3;
-    bool shrink_ = false;
-    float scale_ = 0.8f;      // 0.5..1.0, only used when shrink_ is on
+    int inset_ = 80;          // percent of each cell kept, 50..95
+    Fill fill_ = kShape;
     int n_fg_ = 4;            // foregrounds in use (2..4)
     float colors_[5][3] = {}; // [0] background, [1..n_fg_] foregrounds
 };

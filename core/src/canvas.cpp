@@ -3,7 +3,9 @@
 #include <raylib.h>
 #include <rlImGui.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace core {
@@ -11,6 +13,28 @@ namespace core {
 namespace {
 ::Color rl(Color c) { return {c.r, c.g, c.b, c.a}; }
 ::Vector2 rl(Vec2 v) { return {v.x, v.y}; }
+
+// Area average: each output pixel is the mean of the source pixels it covers. Unlike
+// bicubic resizing it does not ring next to sharp edges, so supersampled edges come out clean.
+std::vector<uint8_t> area_downscale(const uint8_t* src, int sw, int sh, int dw, int dh) {
+    std::vector<uint8_t> out(static_cast<size_t>(dw) * static_cast<size_t>(dh) * 4);
+    for (int y = 0; y < dh; ++y) {
+        const int y0 = y * sh / dh, y1 = std::max(y0 + 1, (y + 1) * sh / dh);
+        for (int x = 0; x < dw; ++x) {
+            const int x0 = x * sw / dw, x1 = std::max(x0 + 1, (x + 1) * sw / dw);
+            uint64_t sum[4] = {};
+            for (int sy = y0; sy < y1; ++sy)
+                for (int sx = x0; sx < x1; ++sx) {
+                    const uint8_t* p = src + (static_cast<size_t>(sy) * static_cast<size_t>(sw) + static_cast<size_t>(sx)) * 4;
+                    for (int k = 0; k < 4; ++k) sum[k] += p[k];
+                }
+            const uint64_t n = static_cast<uint64_t>(y1 - y0) * static_cast<uint64_t>(x1 - x0);
+            uint8_t* q = out.data() + (static_cast<size_t>(y) * static_cast<size_t>(dw) + static_cast<size_t>(x)) * 4;
+            for (int k = 0; k < 4; ++k) q[k] = static_cast<uint8_t>((sum[k] + n / 2) / n);
+        }
+    }
+    return out;
+}
 } // namespace
 
 Color hsv(float h, float s, float v, float a) {
@@ -21,10 +45,15 @@ Color hsv(float h, float s, float v, float a) {
 
 struct Canvas::Impl {
     RenderTexture2D tex;
+    int ss = 1; // supersampling factor: drawn at ss times the size, averaged down on output
 };
 
+// Drawing at up to 4x and averaging down on output smooths every edge (raylib's render
+// textures have no MSAA here). shortcut: the long side times ss stays within 4096 px, the
+// safe texture size on phones, so 1080 gets 3x and canvases above 4096 px get none.
 Canvas::Canvas(int width, int height) : w_(width), h_(height), impl_(new Impl) {
-    impl_->tex = LoadRenderTexture(w_, h_);
+    impl_->ss = std::clamp(4096 / std::max(w_, h_), 1, 4);
+    impl_->tex = LoadRenderTexture(w_ * impl_->ss, h_ * impl_->ss);
     SetTextureFilter(impl_->tex.texture, TEXTURE_FILTER_BILINEAR);
 }
 
@@ -33,8 +62,19 @@ Canvas::~Canvas() {
     delete impl_;
 }
 
-void Canvas::begin() { BeginTextureMode(impl_->tex); }
-void Canvas::end() { EndTextureMode(); }
+// The camera scales every draw call, so pieces keep working in canvas pixels.
+void Canvas::begin() {
+    BeginTextureMode(impl_->tex);
+    BeginMode2D(Camera2D{{0, 0}, {0, 0}, 0.0f, static_cast<float>(impl_->ss)});
+}
+
+void Canvas::end() {
+    EndMode2D();
+    EndTextureMode();
+    // The preview shows the texture smaller than it is; mipmaps keep it from shimmering.
+    GenTextureMipmaps(&impl_->tex.texture);
+    SetTextureFilter(impl_->tex.texture, TEXTURE_FILTER_TRILINEAR);
+}
 
 void Canvas::clear(Color c) { ClearBackground(rl(c)); }
 
@@ -79,18 +119,18 @@ void Canvas::polygon(std::span<const Vec2> pts, Color c) {
 bool Canvas::save_png(const std::string& path) const {
     Image img = LoadImageFromTexture(impl_->tex.texture);
     ImageFlipVertical(&img); // render textures are stored upside down
-    bool ok = ExportImage(img, path.c_str());
+    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    std::vector<uint8_t> px = area_downscale(static_cast<const uint8_t*>(img.data), img.width, img.height, w_, h_);
     UnloadImage(img);
-    return ok;
+    Image out{px.data(), w_, h_, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    return ExportImage(out, path.c_str());
 }
 
 std::vector<uint8_t> Canvas::read_rgba(int out_w, int out_h) const {
     Image img = LoadImageFromTexture(impl_->tex.texture);
     ImageFlipVertical(&img); // render textures are stored upside down
     ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    if (img.width != out_w || img.height != out_h) ImageResize(&img, out_w, out_h);
-    const auto* px = static_cast<const uint8_t*>(img.data);
-    std::vector<uint8_t> out(px, px + static_cast<size_t>(out_w) * static_cast<size_t>(out_h) * 4);
+    std::vector<uint8_t> out = area_downscale(static_cast<const uint8_t*>(img.data), img.width, img.height, out_w, out_h);
     UnloadImage(img);
     return out;
 }

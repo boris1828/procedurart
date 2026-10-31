@@ -13,8 +13,7 @@ English; the user writes in English or Italian. Keep answers short and concrete.
 
 ```
 CMakeLists.txt            top level: FetchContent deps, add_subdirectory(core), add_subdirectory(pieces)
-cmake/Dependencies.cmake  raylib 5.5, Dear ImGui v1.92.9b, rlImGui main (imgui_rl static lib),
-                          delaunator-cpp v0.4.0 (header only, `delaunator` interface target)
+cmake/Dependencies.cmake  raylib 5.5, Dear ImGui v1.92.9b, rlImGui main (imgui_rl static lib)
 cmake/AddPiece.cmake      add_piece(<name> <sources...>) — one exe per piece, links `core`;
                           on Emscripten it emits an .html using web/shell.html
 core/
